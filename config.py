@@ -39,6 +39,12 @@ class Settings:
     cooldown_hours: int
     min_alert_score: int
     daily_alert_limit: int
+    high_alert_score: int
+    early_alert_score: int
+    high_daily_limit: int
+    early_daily_limit: int
+    u_bottom_limit: int
+    u_bottom_cooldown_days: int
     send_watch_alerts: bool
 
 
@@ -59,5 +65,11 @@ def get_settings() -> Settings:
         cooldown_hours=int(os.getenv("COOLDOWN_HOURS", "24")),
         min_alert_score=int(os.getenv("MIN_ALERT_SCORE", "85")),
         daily_alert_limit=int(os.getenv("DAILY_ALERT_LIMIT", "5")),
+        high_alert_score=int(os.getenv("HIGH_ALERT_SCORE", "80")),
+        early_alert_score=int(os.getenv("EARLY_ALERT_SCORE", "70")),
+        high_daily_limit=int(os.getenv("HIGH_DAILY_LIMIT", "5")),
+        early_daily_limit=int(os.getenv("EARLY_DAILY_LIMIT", "5")),
+        u_bottom_limit=int(os.getenv("U_BOTTOM_LIMIT", "5")),
+        u_bottom_cooldown_days=int(os.getenv("U_BOTTOM_COOLDOWN_DAYS", "7")),
         send_watch_alerts=_bool_env("SEND_WATCH_ALERTS", False),
     )
