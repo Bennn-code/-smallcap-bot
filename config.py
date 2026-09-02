@@ -65,7 +65,7 @@ def get_settings() -> Settings:
         cooldown_hours=int(os.getenv("COOLDOWN_HOURS", "24")),
         min_alert_score=int(os.getenv("MIN_ALERT_SCORE", "85")),
         daily_alert_limit=int(os.getenv("DAILY_ALERT_LIMIT", "5")),
-        high_alert_score=int(os.getenv("HIGH_ALERT_SCORE", "80")),
+        high_alert_score=int(os.getenv("HIGH_ALERT_SCORE", "75")),
         early_alert_score=int(os.getenv("EARLY_ALERT_SCORE", "70")),
         high_daily_limit=int(os.getenv("HIGH_DAILY_LIMIT", "5")),
         early_daily_limit=int(os.getenv("EARLY_DAILY_LIMIT", "5")),

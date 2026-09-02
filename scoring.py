@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-HIGH_ALERT_SCORE = 80
+HIGH_ALERT_SCORE = 75
 EARLY_ALERT_SCORE = 70
+WATCH_SCORE = 60
 
 
 @dataclass(frozen=True)
@@ -232,11 +233,11 @@ def direction_for(
 
 
 def level_for(score: int, direction: str) -> str:
-    if score >= HIGH_ALERT_SCORE and direction in {"LONG", "SHORT"}:
+    if score >= HIGH_ALERT_SCORE:
         return "HIGH"
-    if score >= EARLY_ALERT_SCORE and direction in {"LONG", "SHORT", "WATCH-LONG", "WATCH-SHORT"}:
+    if score >= EARLY_ALERT_SCORE:
         return "EARLY"
-    if score >= 60:
+    if score >= WATCH_SCORE:
         return "WATCH"
     return "DEBUG"
 
@@ -456,14 +457,18 @@ def build_candidate(
 def format_candidate(candidate: Candidate) -> str:
     side_icon = "🟢" if "LONG" in candidate.direction else "🔴" if "SHORT" in candidate.direction else "🟡"
     level_icon = "🚀" if candidate.level == "HIGH" else "🌱" if candidate.level == "EARLY" else "👀"
-    if candidate.direction.startswith("WATCH"):
-        title = f"{side_icon}{level_icon} 小幣早期雷達 | {candidate.level} | {candidate.direction}"
+    direction_text = display_direction(candidate.direction)
+    if candidate.direction == "WATCH":
+        title = f"{side_icon}{level_icon} 小幣雷達 | {candidate.level} | 待觀察"
+    elif candidate.direction.startswith("WATCH"):
+        title = f"{side_icon}{level_icon} 小幣雷達 | {candidate.level} | {direction_text}"
     else:
-        title = f"{side_icon}{level_icon} 小幣合約機會 | {candidate.level} | {candidate.direction}"
+        title = f"{side_icon}{level_icon} 小幣合約機會 | {candidate.level} | {direction_text}"
     reasons = "\n".join(f"• {item}" for item in candidate.reasons) if candidate.reasons else "• 條件接近，等待確認"
     tags = "  ".join(f"#{item}" for item in candidate.tags) if candidate.tags else "#無"
     oi_1h = "N/A" if candidate.oi_1h_pct is None else f"{candidate.oi_1h_pct:+.1f}%"
     oi_4h = "N/A" if candidate.oi_4h_pct is None else f"{candidate.oi_4h_pct:+.1f}%"
+    direction_reasons = "\n".join(f"• {item}" for item in direction_explanation(candidate))
 
     return "\n".join(
         [
@@ -471,8 +476,11 @@ def format_candidate(candidate: Candidate) -> str:
             "",
             f"【{candidate.symbol}】{candidate.name or candidate.base_symbol}",
             f"分數：{score_bar(candidate.score)}",
-            f"方向：{candidate.direction}｜信心：{candidate.confidence}",
+            f"方向判斷：{direction_text}｜信心：{candidate.confidence}",
             f"標籤：{tags}",
+            "",
+            "🧭 方向理由",
+            direction_reasons,
             "",
             "📊 價格動能",
             f"1h {candidate.pct_1h:+.1f}%｜24h {candidate.pct_24h:+.1f}%｜7d {candidate.pct_7d:+.1f}%",
@@ -488,6 +496,9 @@ def format_candidate(candidate: Candidate) -> str:
             "為什麼推：",
             reasons,
             "",
+            "下一步：",
+            next_step_text(candidate),
+            "",
             "提醒：這是雷達訊號，不是直接下單建議；進場仍要看型態、止損與流動性。",
         ]
     )
@@ -496,6 +507,66 @@ def format_candidate(candidate: Candidate) -> str:
 def score_bar(score: int) -> str:
     filled = max(0, min(10, round(score / 10)))
     return f"{'█' * filled}{'░' * (10 - filled)} {score}/100"
+
+
+def display_direction(direction: str) -> str:
+    if direction == "LONG":
+        return "LONG"
+    if direction == "SHORT":
+        return "SHORT"
+    if direction == "WATCH-LONG":
+        return "LONG（早期觀察）"
+    if direction == "WATCH-SHORT":
+        return "SHORT（早期觀察）"
+    return "待觀察"
+
+
+def direction_explanation(candidate: Candidate) -> list[str]:
+    if candidate.direction == "LONG":
+        return [
+            "1h/24h 價格動能偏多",
+            "24h量/市值達到啟動門檻",
+            "OI 或資金費率至少有一項支持多方",
+        ]
+    if candidate.direction == "SHORT":
+        return [
+            "短線價格轉弱或過熱後回落",
+            "OI 增加代表合約部位仍在堆疊",
+            "偏空訊號比偏多訊號更明確",
+        ]
+    if candidate.direction == "WATCH-LONG":
+        return [
+            "價格與量能偏多，但確認條件還沒完全補齊",
+            "目前先列為早期 LONG，不當成完整強訊號",
+            "需要看 4H 回踩、OI 或續量確認",
+        ]
+    if candidate.direction == "WATCH-SHORT":
+        return [
+            "價格或資金費率有偏空跡象，但確認條件還沒完全補齊",
+            "目前先列為早期 SHORT，不當成完整強訊號",
+            "需要看 4H 反彈無力或 OI 續增確認",
+        ]
+
+    reasons = ["分數達標，但多空方向尚未乾淨"]
+    if candidate.oi_1h_pct is None and candidate.oi_4h_pct is None:
+        reasons.append("OI 1h/4h 皆為 N/A，缺少合約持倉確認")
+    if candidate.pct_1h * candidate.pct_24h < 0:
+        reasons.append("1h 與 24h 動能方向衝突")
+    if candidate.pct_24h > 40 or candidate.pct_7d > 150:
+        reasons.append("短期漲幅偏高，追價風險較大")
+    return reasons
+
+
+def next_step_text(candidate: Candidate) -> str:
+    if candidate.direction == "LONG":
+        return "到 TradingView 看 4H 是否回踩不破、量能是否延續，再決定進場與止損。"
+    if candidate.direction == "SHORT":
+        return "到 TradingView 看反彈是否站不回壓力區，避免在急跌後直接追空。"
+    if candidate.direction == "WATCH-LONG":
+        return "等待 4H 回踩不破、OI 補上或放量延續，才比較像可交易 LONG。"
+    if candidate.direction == "WATCH-SHORT":
+        return "等待 4H 反彈無力、OI 續增或資金費率偏擁擠，才比較像可交易 SHORT。"
+    return "先放入待觀察；等方向、OI 或 4H 結構變乾淨再判斷。"
 
 
 def _average(values: list[float]) -> float:
