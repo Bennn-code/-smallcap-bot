@@ -73,6 +73,18 @@ def _normalize_bingx_symbol(symbol: str) -> str:
     return symbol.replace("-", "")
 
 
+def _fallback_interval(interval: str) -> str:
+    return {
+        "D": "1d",
+        "240": "4h",
+        "60": "1h",
+        "30": "30m",
+        "15": "15m",
+        "5": "5m",
+        "1": "1m",
+    }.get(interval, interval)
+
+
 def _bingx_request(path: str, params: dict[str, Any] | None = None) -> Any:
     request_params = dict(params or {})
     request_params.setdefault("timestamp", str(int(time.time() * 1000)))
@@ -137,6 +149,41 @@ def fetch_bingx_open_interest_change(symbol: str, interval: str, limit: int = 2)
     return fetch_binance_open_interest_change(symbol, interval, limit)
 
 
+def fetch_bingx_klines(symbol: str, interval: str, limit: int = 120) -> list[dict[str, Any]]:
+    rows = _bingx_request(
+        "/openApi/swap/v3/quote/klines",
+        params={"symbol": _bingx_symbol(symbol), "interval": interval, "limit": str(limit)},
+    )
+    if not isinstance(rows, list):
+        return []
+
+    parsed: list[dict[str, Any]] = []
+    for row in rows:
+        if isinstance(row, dict):
+            parsed.append(
+                {
+                    "timestamp": row.get("time") or row.get("openTime"),
+                    "open": row.get("open"),
+                    "high": row.get("high"),
+                    "low": row.get("low"),
+                    "close": row.get("close"),
+                    "volume": row.get("volume"),
+                }
+            )
+        elif isinstance(row, list) and len(row) >= 6:
+            parsed.append(
+                {
+                    "timestamp": row[0],
+                    "open": row[1],
+                    "high": row[2],
+                    "low": row[3],
+                    "close": row[4],
+                    "volume": row[5],
+                }
+            )
+    return sorted(parsed, key=lambda item: int(item.get("timestamp") or 0))
+
+
 def fetch_binance_linear_tickers() -> dict[str, dict[str, Any]]:
     rows = request_json(f"{BINANCE_FAPI_BASE_URL}/fapi/v1/ticker/24hr")
     funding_rows = request_json(f"{BINANCE_FAPI_BASE_URL}/fapi/v1/premiumIndex")
@@ -192,6 +239,31 @@ def fetch_binance_open_interest_change(symbol: str, period: str, limit: int = 2)
         return None
 
     return (last - first) / first * 100
+
+
+def fetch_binance_klines(symbol: str, interval: str, limit: int = 120) -> list[dict[str, Any]]:
+    rows = request_json(
+        f"{BINANCE_FAPI_BASE_URL}/fapi/v1/klines",
+        params={"symbol": symbol, "interval": interval, "limit": str(limit)},
+    )
+    if not isinstance(rows, list):
+        return []
+
+    parsed: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, list) or len(row) < 6:
+            continue
+        parsed.append(
+            {
+                "timestamp": row[0],
+                "open": row[1],
+                "high": row[2],
+                "low": row[3],
+                "close": row[4],
+                "volume": row[5],
+            }
+        )
+    return parsed
 
 
 def fetch_bybit_linear_tickers() -> dict[str, dict[str, Any]]:
@@ -283,6 +355,43 @@ def fetch_bybit_open_interest_change(symbol: str, interval: str, limit: int = 2)
         return None
 
     return (last - first) / first * 100
+
+
+def fetch_bybit_klines(symbol: str, interval: str, limit: int = 120) -> list[dict[str, Any]]:
+    try:
+        data = request_json(
+            f"{BYBIT_BASE_URL}/v5/market/kline",
+            params={
+                "category": "linear",
+                "symbol": symbol,
+                "interval": interval,
+                "limit": str(limit),
+            },
+        )
+    except ApiError:
+        try:
+            return fetch_bingx_klines(symbol, _fallback_interval(interval), limit)
+        except ApiError:
+            return fetch_binance_klines(symbol, _fallback_interval(interval), limit)
+
+    if data.get("retCode") != 0:
+        raise ApiError(f"bybit kline error for {symbol}: {data}")
+
+    parsed: list[dict[str, Any]] = []
+    for row in data.get("result", {}).get("list", []):
+        if not isinstance(row, list) or len(row) < 6:
+            continue
+        parsed.append(
+            {
+                "timestamp": row[0],
+                "open": row[1],
+                "high": row[2],
+                "low": row[3],
+                "close": row[4],
+                "volume": row[5],
+            }
+        )
+    return sorted(parsed, key=lambda item: int(item.get("timestamp") or 0))
 
 
 def fetch_cmc_listings(api_key: str, limit: int = 5000) -> dict[str, dict[str, Any]]:

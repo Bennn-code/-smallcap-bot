@@ -20,7 +20,13 @@ SCAN_INTERVAL_SECONDS=600
 DRY_RUN=true
 MIN_ALERT_SCORE=85
 DAILY_ALERT_LIMIT=5
+HIGH_ALERT_SCORE=80
+EARLY_ALERT_SCORE=70
+HIGH_DAILY_LIMIT=5
+EARLY_DAILY_LIMIT=5
 COOLDOWN_HOURS=24
+U_BOTTOM_LIMIT=5
+U_BOTTOM_COOLDOWN_DAYS=7
 SEND_WATCH_ALERTS=false
 ```
 
@@ -56,6 +62,14 @@ python scanner.py --once --watch-summary --max-alerts 5
 
 `--watch-summary` 每次執行都會發送 Telegram，不會被「一天只發一次摘要」限制擋住。它不是正式推薦，而是用來觀察最接近條件的標的，並確認 cron、API、Telegram 都有正常觸發。
 
+U 型底反轉掃描：
+
+```bash
+python scanner.py --once --u-bottom --max-alerts 5
+```
+
+`--u-bottom` 以日線為主、4 小時線為輔。它只在掃到候選標的時推送，沒有候選就保持安靜。
+
 長期執行：
 
 ```bash
@@ -76,6 +90,12 @@ python scanner.py
 0 1,7,13,19 * * * cd /home/ubuntu/smallcap-bot && /home/ubuntu/smallcap-bot/.venv/bin/python scanner.py --once --watch-summary --max-alerts 5 >> /home/ubuntu/smallcap-bot/cron.log 2>&1
 ```
 
+U 型底每三天掃一次，台灣時間約 09:30：
+
+```cron
+30 1 */3 * * cd /home/ubuntu/smallcap-bot && /home/ubuntu/smallcap-bot/.venv/bin/python scanner.py --once --u-bottom --max-alerts 5 >> /home/ubuntu/smallcap-bot/cron.log 2>&1
+```
+
 ## 目前評分重點
 
 - 市值最偏好 `300M - 1B`，其次 `1B - 3B`
@@ -85,14 +105,19 @@ python scanner.py
 - LONG：OI 放大、資金健康、價格溫和啟動
 - SHORT：過熱後轉弱、OI 增加、資金費率偏高、短線回落
 - WATCH：分數夠但方向不乾淨，預設不推送 Telegram
-- Telegram 預設只發 `85` 分以上，每天最多 `5` 顆
+- HIGH：`80` 分以上，每天最多 `5` 則
+- EARLY：`70` 分以上，每天最多 `5` 則
+- 同幣同方向同等級冷卻 `24` 小時
+- 同幣同方向從 EARLY 升 HIGH 可以再推一次
+- U 型底反轉用日線看底部結構，4 小時線確認右側放量與趨勢
 
 Telegram 標題例子：
 
 ```text
-🟢📈 小幣合約機會 | HIGH | LONG
-🔴🔥 小幣合約機會 | HIGH | SHORT
-🟡⏳ 小幣觀察 | WATCH
+🟢🚀 小幣合約機會 | HIGH | LONG
+🟡🌱 小幣早期雷達 | EARLY | WATCH-LONG
+🔴🚀 小幣合約機會 | HIGH | SHORT
+🟣🥣 U型底反轉雷達 | DAILY主 / 4H輔 | PROMUSDT
 ```
 
 正式上線前，建議重新產生新的 CMC API key，並刪除曾經貼在聊天中的舊 key。

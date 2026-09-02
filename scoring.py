@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+HIGH_ALERT_SCORE = 80
+EARLY_ALERT_SCORE = 70
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -29,6 +32,27 @@ class Candidate:
     direction: str
     direction_icon: str
     confidence: str
+    tags: list[str]
+    reasons: list[str]
+
+
+@dataclass(frozen=True)
+class UBottomCandidate:
+    symbol: str
+    base_symbol: str
+    name: str
+    cmc_rank: int | None
+    market_cap: float
+    market_cap_bucket: str
+    score: int
+    last_price: float
+    low_90d: float
+    high_90d: float
+    bounce_from_low_pct: float
+    distance_to_30d_high_pct: float
+    daily_volume_ratio: float
+    h4_volume_ratio: float
+    h4_trend_pct: float
     tags: list[str]
     reasons: list[str]
 
@@ -208,9 +232,11 @@ def direction_for(
 
 
 def level_for(score: int, direction: str) -> str:
-    if score >= 85 and direction in {"LONG", "SHORT"}:
+    if score >= HIGH_ALERT_SCORE and direction in {"LONG", "SHORT"}:
         return "HIGH"
-    if score >= 65:
+    if score >= EARLY_ALERT_SCORE and direction in {"LONG", "SHORT", "WATCH-LONG", "WATCH-SHORT"}:
+        return "EARLY"
+    if score >= 60:
         return "WATCH"
     return "DEBUG"
 
@@ -272,8 +298,8 @@ def build_debug_candidate(
         fail_reasons.append("CMC成交量低於500K")
     if bybit_turnover_24h < 1_000_000:
         fail_reasons.append("Bybit合約量低於1M")
-    if score < 85:
-        fail_reasons.append("分數低於85")
+    if score < HIGH_ALERT_SCORE:
+        fail_reasons.append(f"分數低於{HIGH_ALERT_SCORE}")
     if direction == "WATCH":
         fail_reasons.append("方向未確認")
     if oi_1h_pct is None and oi_4h_pct is None:
@@ -372,26 +398,30 @@ def build_candidate(
 
     if market_cap < 100_000_000:
         if volume_to_mcap_pct < 20 or bybit_turnover_24h < 5_000_000:
+            if direction == "LONG":
+                direction, icon, confidence = "WATCH-LONG", "🌱", "中"
             score = min(score, 74)
-            reasons.append("低市值需更高成交量，暫列觀察")
+            reasons.append("低市值需更高成交量，先列早期觀察")
     elif market_cap < 300_000_000:
         if volume_to_mcap_pct < 12 or bybit_turnover_24h < 3_000_000:
+            if direction == "LONG":
+                direction, icon, confidence = "WATCH-LONG", "🌱", "中"
             score = min(score, 74)
-            reasons.append("100M-300M 量能未達 HIGH 補償條件")
+            reasons.append("100M-300M 量能未達 HIGH，先列早期觀察")
 
     if pct_1h > 15 or pct_24h > 60 or pct_7d > 250:
         if direction == "LONG":
-            direction, icon, confidence = "WATCH", "👀", "低"
+            direction, icon, confidence = "WATCH-LONG", "👀", "低"
             reasons.append("不追高保護")
             score = min(score, 79)
 
     if direction in {"LONG", "SHORT"} and oi_1h_pct is None and oi_4h_pct is None:
-        direction, icon, confidence = "WATCH", "⏳", "低"
+        direction, icon, confidence = "WATCH-LONG" if direction == "LONG" else "WATCH-SHORT", "⏳", "低"
         score = min(score, 79)
         reasons.append("缺少OI確認")
 
     level = level_for(score, direction)
-    if level != "HIGH":
+    if level not in {"HIGH", "EARLY"}:
         return None
 
     return Candidate(
@@ -424,13 +454,14 @@ def build_candidate(
 
 
 def format_candidate(candidate: Candidate) -> str:
-    side_icon = "🟢" if candidate.direction == "LONG" else "🔴" if candidate.direction == "SHORT" else "🟡"
-    if candidate.direction == "WATCH":
-        title = f"{side_icon}{candidate.direction_icon} 小幣觀察 | {candidate.level}"
+    side_icon = "🟢" if "LONG" in candidate.direction else "🔴" if "SHORT" in candidate.direction else "🟡"
+    level_icon = "🚀" if candidate.level == "HIGH" else "🌱" if candidate.level == "EARLY" else "👀"
+    if candidate.direction.startswith("WATCH"):
+        title = f"{side_icon}{level_icon} 小幣早期雷達 | {candidate.level} | {candidate.direction}"
     else:
-        title = f"{side_icon}{candidate.direction_icon} 小幣合約機會 | {candidate.level} | {candidate.direction}"
-    reasons = "、".join(candidate.reasons) if candidate.reasons else "條件接近，等待確認"
-    tags = "・".join(candidate.tags) if candidate.tags else "無"
+        title = f"{side_icon}{level_icon} 小幣合約機會 | {candidate.level} | {candidate.direction}"
+    reasons = "\n".join(f"• {item}" for item in candidate.reasons) if candidate.reasons else "• 條件接近，等待確認"
+    tags = "  ".join(f"#{item}" for item in candidate.tags) if candidate.tags else "#無"
     oi_1h = "N/A" if candidate.oi_1h_pct is None else f"{candidate.oi_1h_pct:+.1f}%"
     oi_4h = "N/A" if candidate.oi_4h_pct is None else f"{candidate.oi_4h_pct:+.1f}%"
 
@@ -438,24 +469,156 @@ def format_candidate(candidate: Candidate) -> str:
         [
             title,
             "",
-            f"幣種：{candidate.symbol}",
-            f"市值區間：{candidate.market_cap_bucket}",
-            f"市值：{format_usd(candidate.market_cap)}",
-            f"CMC排名：{candidate.cmc_rank or 'N/A'}",
-            f"分數：{candidate.score}",
-            f"方向信心：{candidate.confidence}",
+            f"【{candidate.symbol}】{candidate.name or candidate.base_symbol}",
+            f"分數：{score_bar(candidate.score)}",
+            f"方向：{candidate.direction}｜信心：{candidate.confidence}",
             f"標籤：{tags}",
             "",
-            f"1h：{candidate.pct_1h:+.1f}%",
-            f"24h：{candidate.pct_24h:+.1f}%",
-            f"7d：{candidate.pct_7d:+.1f}%",
-            f"OI 1h：{oi_1h}",
-            f"OI 4h：{oi_4h}",
-            f"24h量/市值：{candidate.volume_to_mcap_pct:.1f}%",
-            f"合約量：{format_usd(candidate.bybit_turnover_24h)}",
-            f"資金費率：{candidate.funding_rate_pct:+.3f}%",
+            "📊 價格動能",
+            f"1h {candidate.pct_1h:+.1f}%｜24h {candidate.pct_24h:+.1f}%｜7d {candidate.pct_7d:+.1f}%",
             "",
-            "原因：",
+            "📈 合約/量能",
+            f"OI 1h {oi_1h}｜OI 4h {oi_4h}",
+            f"24h量/市值 {candidate.volume_to_mcap_pct:.1f}%｜合約量 {format_usd(candidate.bybit_turnover_24h)}",
+            f"資金費率 {candidate.funding_rate_pct:+.3f}%",
+            "",
+            "🏷 基本資料",
+            f"市值 {format_usd(candidate.market_cap)}｜區間 {candidate.market_cap_bucket}｜CMC #{candidate.cmc_rank or 'N/A'}",
+            "",
+            "為什麼推：",
             reasons,
+            "",
+            "提醒：這是雷達訊號，不是直接下單建議；進場仍要看型態、止損與流動性。",
+        ]
+    )
+
+
+def score_bar(score: int) -> str:
+    filled = max(0, min(10, round(score / 10)))
+    return f"{'█' * filled}{'░' * (10 - filled)} {score}/100"
+
+
+def _average(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def detect_u_bottom_candidate(
+    symbol: str,
+    cmc: dict[str, Any],
+    daily_klines: list[dict[str, Any]],
+    h4_klines: list[dict[str, Any]],
+) -> UBottomCandidate | None:
+    if len(daily_klines) < 60 or len(h4_klines) < 40:
+        return None
+
+    quote = cmc.get("quote", {}).get("USD", {})
+    market_cap = to_float(quote.get("market_cap"))
+    market_cap_points, bucket = market_cap_score(market_cap)
+    if market_cap_points < 0:
+        return None
+
+    daily = daily_klines[-120:]
+    h4 = h4_klines[-120:]
+    closes = [to_float(item.get("close")) for item in daily]
+    highs = [to_float(item.get("high")) for item in daily]
+    lows = [to_float(item.get("low")) for item in daily]
+    volumes = [to_float(item.get("volume")) for item in daily]
+    if not closes or min(closes[-10:]) <= 0:
+        return None
+
+    last_price = closes[-1]
+    high_90d = max(highs[-90:])
+    low_90d = min(lows[-90:])
+    low_30d = min(lows[-30:])
+    high_30d = max(highs[-30:])
+    prev_30d_high = max(highs[-31:-1])
+    recent_14d_low = min(lows[-14:])
+    drawdown_pct = (high_90d - low_90d) / high_90d * 100 if high_90d else 0
+    bounce_from_low_pct = (last_price - low_30d) / low_30d * 100 if low_30d else 0
+    distance_to_30d_high_pct = (last_price - prev_30d_high) / prev_30d_high * 100 if prev_30d_high else 0
+    volume_ratio = _average(volumes[-3:]) / _average(volumes[-30:-3]) if _average(volumes[-30:-3]) else 0
+
+    h4_closes = [to_float(item.get("close")) for item in h4]
+    h4_volumes = [to_float(item.get("volume")) for item in h4]
+    h4_trend_pct = (h4_closes[-1] - h4_closes[-12]) / h4_closes[-12] * 100 if h4_closes[-12] else 0
+    h4_volume_ratio = _average(h4_volumes[-6:]) / _average(h4_volumes[-48:-6]) if _average(h4_volumes[-48:-6]) else 0
+
+    score = 0
+    reasons: list[str] = []
+    tags: list[str] = []
+
+    if drawdown_pct >= 50:
+        score += 20
+        reasons.append(f"90日高點回落 {drawdown_pct:.0f}%，有完整洗盤空間")
+        tags.append("深跌後修復")
+    if recent_14d_low > low_30d * 1.03:
+        score += 18
+        reasons.append("近14日低點抬高，右側底部開始墊高")
+        tags.append("低點抬高")
+    if 12 <= bounce_from_low_pct <= 120:
+        score += 18
+        reasons.append(f"距30日低點反彈 {bounce_from_low_pct:.0f}%，不是剛落刀也還沒過熱")
+        tags.append("右側回升")
+    if distance_to_30d_high_pct >= -8:
+        score += 18
+        reasons.append("價格接近或突破30日結構高點")
+        tags.append("接近頸線")
+    if volume_ratio >= 1.4:
+        score += 14
+        reasons.append(f"日線近3日量能約為前段 {volume_ratio:.1f} 倍")
+        tags.append("日線放量")
+    if h4_trend_pct >= 3 and h4_volume_ratio >= 1.1:
+        score += 12
+        reasons.append("4小時線同步放量上彎，右側確認較佳")
+        tags.append("4H確認")
+
+    if drawdown_pct < 45 or bounce_from_low_pct < 8 or distance_to_30d_high_pct < -15:
+        return None
+    if score < 70:
+        return None
+
+    return UBottomCandidate(
+        symbol=symbol,
+        base_symbol=symbol.removesuffix("USDT"),
+        name=cmc.get("name", ""),
+        cmc_rank=cmc.get("cmc_rank"),
+        market_cap=market_cap,
+        market_cap_bucket=bucket,
+        score=max(0, min(100, int(score))),
+        last_price=last_price,
+        low_90d=low_90d,
+        high_90d=high_90d,
+        bounce_from_low_pct=bounce_from_low_pct,
+        distance_to_30d_high_pct=distance_to_30d_high_pct,
+        daily_volume_ratio=volume_ratio,
+        h4_volume_ratio=h4_volume_ratio,
+        h4_trend_pct=h4_trend_pct,
+        tags=tags[:5],
+        reasons=reasons[:5],
+    )
+
+
+def format_u_bottom_candidate(candidate: UBottomCandidate) -> str:
+    tags = "  ".join(f"#{item}" for item in candidate.tags) if candidate.tags else "#U型底"
+    reasons = "\n".join(f"• {item}" for item in candidate.reasons)
+    return "\n".join(
+        [
+            f"🟣🥣 U型底反轉雷達 | DAILY主 / 4H輔 | {candidate.symbol}",
+            "",
+            f"【{candidate.symbol}】{candidate.name or candidate.base_symbol}",
+            f"分數：{score_bar(candidate.score)}",
+            f"標籤：{tags}",
+            "",
+            "📐 結構",
+            f"90日高點 {candidate.high_90d:.6g}｜90日低點 {candidate.low_90d:.6g}｜現價 {candidate.last_price:.6g}",
+            f"低點反彈 {candidate.bounce_from_low_pct:+.1f}%｜距30日頸線 {candidate.distance_to_30d_high_pct:+.1f}%",
+            "",
+            "📊 量能確認",
+            f"日線近3日量能 {candidate.daily_volume_ratio:.1f}x｜4H量能 {candidate.h4_volume_ratio:.1f}x｜4H趨勢 {candidate.h4_trend_pct:+.1f}%",
+            "",
+            "為什麼推：",
+            reasons,
+            "",
+            "提醒：U型底屬於早期結構訊號，適合再到 TradingView 看頸線、回踩與止損位置。",
         ]
     )
